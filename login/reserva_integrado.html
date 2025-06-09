@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reserva de Sala</title>
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(0,0,0,0.1);
+      border-radius: 50%;
+      border-top-color: #0078d7;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    input:invalid {
+      border-color: #ff4444;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📅 Reserva de Sala</h1>
+    <form id="reservaForm">
+      <label for="sala">Sala:</label>
+      <select id="sala" required>
+        <option value="">-- Selecione --</option>
+        <option value="Sala 1">Sala 1</option>
+        <option value="Sala 2">Sala 2</option>
+        <option value="Sala 3">Sala 3</option>
+        <option value="Sala 4">Sala 4</option>
+        <option value="Sala 5">Sala 5</option>
+      </select>
+
+      <label for="data">Data:</label>
+      <input type="date" id="data" required min="2023-01-01">
+
+      <label for="horario">Horário:</label>
+      <select id="horario" required disabled>
+        <option value="">-- Selecione a sala e data primeiro --</option>
+      </select>
+
+      <button type="submit" id="submitBtn">
+        <span id="btnText">Reservar</span>
+        <span id="btnLoading" class="loading" style="display:none;"></span>
+      </button>
+    </form>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Configuração do Firebase
+    const firebaseConfig = {
+      apiKey: "AIzaSyAzG3qP32OcQ8qhiJ5n56onDLjqpxoC1ms",
+      authDomain: "reserva-b9d36.firebaseapp.com",
+      projectId: "reserva-b9d36",
+      storageBucket: "reserva-b9d36.appspot.com",
+      messagingSenderId: "985475681992",
+      appId: "1:985475681992:web:efc82015c48984ee35dffd"
+    };
+
+    // Inicializa Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // Elementos do DOM
+    const form = document.getElementById('reservaForm');
+    const salaSelect = document.getElementById('sala');
+    const dataInput = document.getElementById('data');
+    const horarioSelect = document.getElementById('horario');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnLoading = document.getElementById('btnLoading');
+
+    // Horários disponíveis
+    const HORARIOS_DISPONIVEIS = [
+      "08:00 – 11:00",
+      "11:00 – 14:00",
+      "14:00 – 17:00",
+      "17:00 – 20:00",
+      "20:00 – 23:00"
+    ];
+
+    // Cache de reservas
+    const reservasCache = new Map();
+    let debounceTimer;
+
+    // Event Listeners
+    salaSelect.addEventListener('change', atualizarInterface);
+    dataInput.addEventListener('change', atualizarInterface);
+
+    // Função principal para atualizar a interface
+    async function atualizarInterface() {
+      const sala = salaSelect.value;
+      const data = dataInput.value;
+
+      if (!sala || !data) {
+        horarioSelect.innerHTML = '<option value="">-- Selecione a sala e data primeiro --</option>';
+        horarioSelect.disabled = true;
+        return;
+      }
+
+      horarioSelect.innerHTML = '<option value="">Carregando horários disponiveis...</option>';
+      horarioSelect.disabled = true;
+
+      // Debounce para evitar múltiplas chamadas
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        try {
+          const horariosDisponiveis = await carregarHorariosDisponiveis(sala, data);
+          atualizarSelectHorarios(horariosDisponiveis);
+        } catch (error) {
+          console.error('Erro ao carregar horários:', error);
+          horarioSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+        } finally {
+          horarioSelect.disabled = false;
+        }
+      }, 300);
+    }
+
+ // Carrega horários disponíveis com cache
+ async function carregarHorariosDisponiveis(sala, data) {
+  const cacheKey = `${sala}_${data}`;
+  
+  if (reservasCache.has(cacheKey)) {
+    return filtrarHorariosDisponiveis(reservasCache.get(cacheKey));
+  }
+
+  const snapshot = await db.collection("reservas")
+    .where("sala", "==", sala)
+    .where("data", "==", data)
+    .get();
+
+  const horariosReservados = snapshot.docs.map(doc => doc.data().horario);
+  reservasCache.set(cacheKey, horariosReservados);
+
+  return filtrarHorariosDisponiveis(horariosReservados);
+}
+
+    // Filtra horários disponíveis
+    function filtrarHorariosDisponiveis(horariosReservados) {
+      return HORARIOS_DISPONIVEIS.filter(horario => 
+        !horariosReservados.includes(horario)
+      );
+    }
+
+    // Atualiza o select de horários
+    function atualizarSelectHorarios(horariosDisponiveis) {
+      horarioSelect.innerHTML = horariosDisponiveis.length > 0
+        ? '<option value="">-- Selecione um horário --</option>'
+        : '<option value="">Nenhum horário disponível</option>';
+
+      horariosDisponiveis.forEach(horario => {
+        const option = document.createElement('option');
+        option.value = horario;
+        option.textContent = horario;
+        horarioSelect.appendChild(option);
+      });
+    }
+    
+
+    // Envio do formulário
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      // 1. Verificação Rápida dos Dados
+      const nome = localStorage.getItem('nome');
+      const matricula = localStorage.getItem('matricula');
+      const sala = salaSelect.value;
+      const data = dataInput.value;
+      const horario = horarioSelect.value;
+    
+      if (!nome || !matricula) {
+        alert('❌ Faça login antes de reservar!');
+        window.location.href = 'login.html';
+        return;
+      }
+    
+      // 2. Feedback Visual Imediato
+      const originalBtnText = submitBtn.innerHTML;
+      submitBtn.innerHTML = `
+        <span class="loading"></span> Processando reserva...
+      `;
+      submitBtn.disabled = true;
+    
+      try {
+        // 3. Verificação de Conflito Otimizada (timeout de 5 segundos)
+        const conflitoPromise = db.collection("reservas")
+          .where("sala", "==", sala)
+          .where("data", "==", data)
+          .where("horario", "==", horario)
+          .get();
+    
+        // Timeout para evitar espera infinita
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Tempo excedido ao verificar disponibilidade")), 50000)
+        );
+    
+        const conflito = await Promise.race([conflitoPromise, timeoutPromise]);
+    
+        if (!conflito.empty) {
+          throw new Error('Este horário foi reservado enquanto você preenchia o formulário');
+        }
+    
+        // 4. Reserva Rápida (sem await para resposta)
+        const reservaPromise = db.collection("reservas").add({
+          nome,
+          matricula,
+          sala,
+          data,
+          horario,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+    
+        // Não espera pela confirmação do Firestore
+        await Promise.race([reservaPromise, new Promise(resolve => setTimeout(resolve, 1000))]);
+    
+        // 5. Redirecionamento Imediato com Dados Locais
+        const params = new URLSearchParams({
+          nome: encodeURIComponent(nome),
+          matricula: encodeURIComponent(matricula),
+          sala: encodeURIComponent(sala),
+          data: encodeURIComponent(data),
+          horario: encodeURIComponent(horario)
+        });
+    
+        window.location.href = `reserva-confirmada.html?${params.toString()}`;
+        
+      } catch (error) {
+        console.error('Erro na reserva:', error);
+        submitBtn.innerHTML = originalBtnText;
+        submitBtn.disabled = false;
+        alert(`⚠️ ${error.message}`);
+      }
+    });
+
+    // Data mínima = hoje
+    dataInput.min = new Date().toISOString().split('T')[0];
+  </script>
+</body>
+</html>
